@@ -1,0 +1,471 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  extensions = [vector]
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+  OWNER
+}
+
+enum SubscriptionTier {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIALING
+}
+
+enum AuditLogAction {
+  CREATE
+  UPDATE
+  DELETE
+  INVITE
+  JOIN
+  LEAVE
+  ANALYZE
+  REFACTOR
+  SYNC
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+}
+
+enum AgentType {
+  CODE_AUDIT
+  SECURITY_SCAN
+  DOCUMENTATION
+  FRAMEWORK_MIGRATION
+  REFACTORING
+  DEPENDENCY_CHECK
+  PROMPT_REFINER
+  PERFORMANCE_OPTIMIZER
+  TEST_GENERATOR
+  CODE_REVIEW
+}
+
+enum AgentStatus {
+  IDLE
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AgentPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model User {
+  id                String          @id @default(uuid())
+  email             String          @unique
+  name              String?
+  avatar_url        String?
+  created_at        DateTime        @default(now())
+  updated_at        DateTime        @updatedAt
+  
+  // NextAuth relations
+  accounts          Account[]
+  sessions          Session[]
+  
+  // Relations
+  teams             TeamMember[]
+  owned_teams       Team[]          @relation("TeamOwner")
+  projects          ProjectMember[]
+  github_accounts   GitHubAccount[]
+  api_keys          ApiKey[]
+  audit_logs        AuditLog[]      @relation("UserAuditLogs")
+  invitations       Invitation[]
+}
+
+model Team {
+  id                  String            @id @default(uuid())
+  name                String
+  slug                String            @unique
+  owner_id            String
+  seats              Int               @default(5)
+  subscription_tier   SubscriptionTier  @default(FREE)
+  subscription_status SubscriptionStatus @default(TRIALING)
+  usage_quota        Int               @default(1000)
+  usage_count        Int               @default(0)
+  billing_customer_id String?          // Stripe customer ID
+  created_at         DateTime          @default(now())
+  updated_at         DateTime          @updatedAt
+
+  // Relations
+  owner              User              @relation("TeamOwner", fields: [owner_id], references: [id])
+  members            TeamMember[]
+  projects           Project[]
+  api_keys           ApiKey[]
+  audit_logs         AuditLog[]
+  invitations        Invitation[]
+  billing_history    BillingHistory[]
+  agent_configurations AgentConfiguration[]
+}
+
+model TeamMember {
+  id            String    @id @default(uuid())
+  team_id       String
+  user_id       String
+  role          UserRole  @default(MEMBER)
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  // Relations
+  team          Team      @relation(fields: [team_id], references: [id])
+  user          User      @relation(fields: [user_id], references: [id])
+
+  @@unique([team_id, user_id])
+}
+
+model Project {
+  id              String    @id @default(uuid())
+  name            String
+  description     String?
+  team_id         String
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  // Relations
+  team            Team      @relation(fields: [team_id], references: [id])
+  members         ProjectMember[]
+  repositories    Repository[]
+  code_files      CodeFile[]
+  refactor_tasks  RefactorTask[]
+  agent_executions    AgentExecution[]
+  dependency_checks   AgentDependencyCheck[]
+  documentation      DocumentationEntry[]
+}
+
+model ProjectMember {
+  id            String    @id @default(uuid())
+  project_id    String
+  user_id       String
+  role          UserRole  @default(MEMBER)
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  // Relations
+  project       Project   @relation(fields: [project_id], references: [id])
+  user          User      @relation(fields: [user_id], references: [id])
+
+  @@unique([project_id, user_id])
+}
+
+model GitHubAccount {
+  id            String    @id @default(uuid())
+  user_id       String
+  access_token  String
+  refresh_token String?
+  scope         String
+  username      String
+  avatar_url    String?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  // Relations
+  user          User      @relation(fields: [user_id], references: [id])
+  repositories  Repository[]
+
+  @@unique([user_id, username])
+}
+
+model Repository {
+  id              String    @id @default(uuid())
+  project_id      String
+  github_account_id String
+  name            String
+  full_name       String    // e.g. "owner/repo"
+  default_branch  String    @default("main")
+  clone_url       String
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  last_synced_at  DateTime?
+
+  // Relations
+  project         Project   @relation(fields: [project_id], references: [id])
+  github_account  GitHubAccount @relation(fields: [github_account_id], references: [id])
+  code_files      CodeFile[]
+  refactor_sources RefactorTask[] @relation("SourceRepository")
+  refactor_targets RefactorTask[] @relation("TargetRepository")
+  agent_executions    AgentExecution[]
+  documentation      DocumentationEntry[]
+}
+
+model CodeFile {
+  id              String    @id @default(uuid())
+  project_id      String
+  repository_id   String
+  path            String
+  content         String
+  language        String
+  embedding       Unsupported("vector(1536)")? // specify dimensions for OpenAI embeddings
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  // Relations
+  project         Project   @relation(fields: [project_id], references: [id])
+  repository      Repository @relation(fields: [repository_id], references: [id])
+  analysis_results AnalysisResult[]
+  refactor_sources RefactorTask[] @relation("SourceFile")
+  refactor_targets RefactorTask[] @relation("TargetFile")
+}
+
+model AnalysisResult {
+  id              String    @id @default(uuid())
+  file_id         String
+  analysis_type   String
+  suggestions     Json
+  summary         String
+  created_at      DateTime  @default(now())
+
+  // Relations
+  file            CodeFile  @relation(fields: [file_id], references: [id])
+}
+
+model RefactorTask {
+  id                String    @id @default(uuid())
+  project_id        String
+  source_repo_id    String
+  target_repo_id    String
+  source_file_id    String
+  target_file_id    String?
+  status            String    @default("pending")
+  configuration     Json?
+  result            Json?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  // Relations
+  project           Project   @relation(fields: [project_id], references: [id])
+  source_repository Repository @relation("SourceRepository", fields: [source_repo_id], references: [id])
+  target_repository Repository @relation("TargetRepository", fields: [target_repo_id], references: [id])
+  source_file      CodeFile  @relation("SourceFile", fields: [source_file_id], references: [id])
+  target_file      CodeFile? @relation("TargetFile", fields: [target_file_id], references: [id])
+}
+
+model ApiKey {
+  id            String    @id @default(uuid())
+  name          String
+  key           String    @unique
+  user_id       String
+  team_id       String
+  expires_at    DateTime?
+  last_used_at  DateTime?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  // Relations
+  user          User      @relation(fields: [user_id], references: [id])
+  team          Team      @relation(fields: [team_id], references: [id])
+}
+
+model AuditLog {
+  id            String    @id @default(uuid())
+  team_id       String
+  user_id       String
+  action        AuditLogAction
+  entity_type   String
+  entity_id     String
+  metadata      Json?
+  created_at    DateTime  @default(now())
+
+  // Relations
+  team          Team      @relation(fields: [team_id], references: [id])
+  user          User      @relation("UserAuditLogs", fields: [user_id], references: [id])
+}
+
+model Invitation {
+  id            String    @id @default(uuid())
+  team_id       String
+  email         String
+  role          UserRole  @default(MEMBER)
+  status        InvitationStatus @default(PENDING)
+  token         String    @unique
+  expires_at    DateTime
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  accepted_by   String?
+
+  // Relations
+  team          Team      @relation(fields: [team_id], references: [id])
+  user          User?     @relation(fields: [accepted_by], references: [id])
+}
+
+model BillingHistory {
+  id            String    @id @default(uuid())
+  team_id       String
+  amount        Float
+  currency      String    @default("USD")
+  status        String
+  invoice_url   String?
+  created_at    DateTime  @default(now())
+
+  // Relations
+  team          Team      @relation(fields: [team_id], references: [id])
+}
+
+model AgentConfiguration {
+  id              String    @id @default(uuid())
+  team_id         String
+  agent_type      AgentType
+  name            String
+  description     String?
+  is_enabled      Boolean   @default(true)
+  parameters      Json      // Stores agent-specific configuration
+  priority        AgentPriority @default(MEDIUM)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  // Relations
+  team            Team      @relation(fields: [team_id], references: [id])
+  executions      AgentExecution[]
+}
+
+model AgentExecution {
+  id                String      @id @default(uuid())
+  configuration_id  String
+  project_id        String
+  repository_id     String?
+  status            AgentStatus @default(IDLE)
+  started_at        DateTime?
+  completed_at      DateTime?
+  error             String?
+  metadata          Json?       // Additional execution metadata
+  results           Json?       // Execution results
+  created_at        DateTime    @default(now())
+  updated_at        DateTime    @updatedAt
+
+  // Relations
+  configuration     AgentConfiguration @relation(fields: [configuration_id], references: [id])
+  project           Project    @relation(fields: [project_id], references: [id])
+  repository        Repository? @relation(fields: [repository_id], references: [id])
+  recommendations   AgentRecommendation[]
+  prompt_results    PromptResult[]
+}
+
+model AgentRecommendation {
+  id                String    @id @default(uuid())
+  execution_id      String
+  file_path         String?
+  title             String
+  description       String
+  priority          AgentPriority @default(MEDIUM)
+  category          String    // e.g., "security", "performance", "refactoring"
+  diff              String?   // Proposed changes in diff format
+  status            String    @default("pending") // pending, approved, rejected, implemented
+  metadata          Json?     // Additional recommendation data
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  // Relations
+  execution         AgentExecution @relation(fields: [execution_id], references: [id])
+}
+
+model PromptResult {
+  id                String    @id @default(uuid())
+  execution_id      String
+  original_prompt   String    // User's original prompt
+  refined_prompt    String    // AI-refined prompt
+  context_files     String[]  // Files used for context
+  cursor_commands   Json?     // Suggested Cursor commands/actions
+  metadata          Json?     // Additional prompt refinement data
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  // Relations
+  execution         AgentExecution @relation(fields: [execution_id], references: [id])
+}
+
+model AgentDependencyCheck {
+  id                String    @id @default(uuid())
+  project_id        String
+  package_name      String
+  current_version   String
+  latest_version    String
+  is_vulnerable     Boolean   @default(false)
+  vulnerability_info Json?
+  upgrade_path      String?
+  breaking_changes  Boolean   @default(false)
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  // Relations
+  project           Project   @relation(fields: [project_id], references: [id])
+}
+
+model DocumentationEntry {
+  id                String    @id @default(uuid())
+  project_id        String
+  repository_id     String?
+  title             String
+  content           String    @db.Text
+  type              String    // api, component, guide, etc.
+  path              String?   // File path if applicable
+  metadata          Json?     // Additional documentation metadata
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  // Relations
+  project           Project   @relation(fields: [project_id], references: [id])
+  repository        Repository? @relation(fields: [repository_id], references: [id])
+}
+
+// NextAuth Models
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?  @db.Text
+  access_token       String?  @db.Text
+  expires_at         Int?
+  refresh_token_expires_in Int?
+  token_type         String?
+  scope              String?
+  id_token           String?  @db.Text
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+} 
