@@ -1,5 +1,11 @@
 import { Adapter, AdapterUser, AdapterAccount, AdapterSession, VerificationToken } from "next-auth/adapters";
-import type { PrismaClient } from "@prisma/client";
+import { PrismaClient } from ".prisma/client";
+
+// Fix the interface to handle the @@unique constraint for provider and providerAccountId
+interface AccountWithCompoundId {
+  provider: string;
+  providerAccountId: string;
+}
 
 export function CustomPrismaAdapter(prisma: PrismaClient): Adapter {
   return {
@@ -106,7 +112,7 @@ export function CustomPrismaAdapter(prisma: PrismaClient): Adapter {
         },
       });
     },
-    unlinkAccount: async ({ provider, providerAccountId }) => {
+    unlinkAccount: async ({ provider, providerAccountId }: AccountWithCompoundId) => {
       await prisma.account.delete({
         where: {
           provider_providerAccountId: {

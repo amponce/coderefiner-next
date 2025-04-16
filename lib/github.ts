@@ -220,3 +220,16 @@ export async function getRepositories(): Promise<Repository[]> {
     },
   ];
 }
+
+// Get repository details by ID
+export async function getRepository(id: string): Promise<Repository | null> {
+  try {
+    // This is a mock implementation - in a real app, you would fetch from your database
+    const repositories = await getRepositories();
+    const repository = repositories.find(repo => repo.id === id);
+    return repository || null;
+  } catch (error) {
+    console.error(`Error fetching repository with ID ${id}:`, error);
+    return null;
+  }
+}
